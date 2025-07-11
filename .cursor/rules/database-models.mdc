@@ -1,0 +1,429 @@
+# 数据库模型规范
+
+## 📂 模型文件组织
+
+### 模型定义 ([`api/models/`](mdc:api/models/))
+```python
+# models/account.py - 用户账户相关模型
+from sqlalchemy import Column, String, DateTime, Boolean, Text
+from sqlalchemy.dialects.postgresql import UUID
+from extensions.ext_database import db
+import uuid
+from datetime import datetime
+
+class Account(db.Model):
+    """用户账户模型"""
+    __tablename__ = 'accounts'
+    
+    # 主键使用UUID
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # 基础字段
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    password_hash = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    avatar = Column(String(255))
+    
+    # 状态字段
+    status = Column(String(16), nullable=False, default='active')  # active, inactive, banned
+    is_email_verified = Column(Boolean, nullable=False, default=False)
+    
+    # 时间戳
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login_at = Column(DateTime)
+    
+    # 软删除
+    deleted_at = Column(DateTime)
+    
+    def __repr__(self):
+        return f'<Account {self.email}>'
+    
+    @property
+    def is_active(self):
+        """账户是否激活"""
+        return self.status == 'active' and self.deleted_at is None
+```
+
+### 关联模型示例
+```python
+# models/app.py - 应用模型
+from sqlalchemy import Column, String, Text, ForeignKey, Integer
+from sqlalchemy.orm import relationship
+from extensions.ext_database import db
+
+class App(db.Model):
+    """AI应用模型"""
+    __tablename__ = 'apps'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # 基础信息
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    icon = Column(String(255))
+    
+    # 关联用户
+    created_by = Column(UUID(as_uuid=True), ForeignKey('accounts.id'), nullable=False)
+    
+    # 配置信息
+    mode = Column(String(255), nullable=False)  # chat, agent, workflow
+    model_config = Column(Text)  # JSON配置
+    
+    # 状态
+    status = Column(String(16), nullable=False, default='normal')
+    enable_site = Column(Boolean, default=True)
+    
+    # 时间戳
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关联关系
+    created_by_account = relationship('Account', backref='apps')
+    
+    def __repr__(self):
+        return f'<App {self.name}>'
+```
+
+## 🗄️ 数据库设计原则
+
+### 1. 字段命名规范
+```python
+# ✅ 好的命名
+class User(db.Model):
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    email = Column(String(255), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)
+    
+# ❌ 避免的命名
+class User(db.Model):
+    userId = Column(String(36))  # 避免驼峰命名
+    e_mail = Column(String(255))  # 避免下划线过多
+    createTime = Column(DateTime)  # 使用created_at
+```
+
+### 2. 索引策略
+```python
+class Message(db.Model):
+    __tablename__ = 'messages'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey('conversations.id'), index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    
+    # 复合索引
+    __table_args__ = (
+        db.Index('idx_messages_conversation_created', 'conversation_id', 'created_at'),
+        db.Index('idx_messages_user_created', 'from_account_id', 'created_at'),
+    )
+```
+
+### 3. 外键约束
+```python
+class Conversation(db.Model):
+    __tablename__ = 'conversations'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    app_id = Column(UUID(as_uuid=True), ForeignKey('apps.id', ondelete='CASCADE'), nullable=False)
+    from_account_id = Column(UUID(as_uuid=True), ForeignKey('accounts.id'), nullable=False)
+    
+    # 定义关联关系
+    app = relationship('App', backref='conversations')
+    from_account = relationship('Account', backref='conversations')
+```
+
+## 🔄 数据迁移规范
+
+### 迁移文件结构 ([`api/migrations/versions/`](mdc:api/migrations/versions/))
+```python
+"""添加用户表
+Revision ID: 001_add_users_table
+Revises: 
+Create Date: 2024-01-01 00:00:00.000000
+"""
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers
+revision = '001_add_users_table'
+down_revision = None
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    """升级数据库结构"""
+    # 创建用户表
+    op.create_table(
+        'accounts',
+        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column('email', sa.String(255), nullable=False),
+        sa.Column('password_hash', sa.String(255), nullable=False),
+        sa.Column('name', sa.String(255), nullable=False),
+        sa.Column('avatar', sa.String(255)),
+        sa.Column('status', sa.String(16), nullable=False, default='active'),
+        sa.Column('is_email_verified', sa.Boolean(), nullable=False, default=False),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
+        sa.Column('last_login_at', sa.DateTime()),
+        sa.Column('deleted_at', sa.DateTime()),
+    )
+    
+    # 创建索引
+    op.create_index('idx_accounts_email', 'accounts', ['email'], unique=True)
+    op.create_index('idx_accounts_status', 'accounts', ['status'])
+    op.create_index('idx_accounts_created_at', 'accounts', ['created_at'])
+
+def downgrade():
+    """回滚数据库结构"""
+    op.drop_index('idx_accounts_created_at', table_name='accounts')
+    op.drop_index('idx_accounts_status', table_name='accounts')
+    op.drop_index('idx_accounts_email', table_name='accounts')
+    op.drop_table('accounts')
+```
+
+### 数据迁移示例
+```python
+"""迁移用户数据格式
+Revision ID: 002_migrate_user_data
+Revises: 001_add_users_table
+Create Date: 2024-01-02 00:00:00.000000
+"""
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.sql import table, column
+
+def upgrade():
+    """
+    复杂的数据迁移逻辑
+    将旧的用户数据格式迁移到新格式
+    """
+    # 定义临时表结构用于数据操作
+    users_table = table(
+        'accounts',
+        column('id', sa.String),
+        column('email', sa.String),
+        column('old_field', sa.String),
+        column('new_field', sa.String),
+    )
+    
+    # 批量更新数据
+    connection = op.get_bind()
+    
+    # 查询需要迁移的数据
+    result = connection.execute(
+        sa.text("SELECT id, old_field FROM accounts WHERE new_field IS NULL")
+    )
+    
+    # 批量处理数据
+    for row in result:
+        # 转换数据格式的逻辑
+        new_value = transform_data(row.old_field)
+        
+        # 更新数据
+        connection.execute(
+            users_table.update()
+            .where(users_table.c.id == row.id)
+            .values(new_field=new_value)
+        )
+
+def transform_data(old_value):
+    """
+    数据转换逻辑
+    这里实现具体的数据格式转换
+    """
+    # 简单的转换示例
+    if old_value:
+        return old_value.strip().lower()
+    return None
+
+def downgrade():
+    """回滚数据迁移"""
+    # 实现回滚逻辑
+    pass
+```
+
+## 🔍 查询优化
+
+### 1. N+1查询问题解决
+```python
+# ❌ 会产生N+1查询
+def get_apps_with_creators():
+    apps = App.query.all()
+    for app in apps:
+        print(f"{app.name} by {app.created_by_account.name}")  # 每次都查询数据库
+
+# ✅ 使用预加载解决
+def get_apps_with_creators():
+    apps = App.query.options(
+        db.joinedload(App.created_by_account)
+    ).all()
+    for app in apps:
+        print(f"{app.name} by {app.created_by_account.name}")  # 不会额外查询
+```
+
+### 2. 分页查询
+```python
+def get_paginated_apps(page=1, per_page=20):
+    """
+    获取分页的应用列表
+    """
+    pagination = App.query.filter(
+        App.deleted_at.is_(None)
+    ).order_by(
+        App.created_at.desc()
+    ).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
+    
+    return {
+        'items': pagination.items,
+        'total': pagination.total,
+        'page': pagination.page,
+        'pages': pagination.pages,
+        'has_prev': pagination.has_prev,
+        'has_next': pagination.has_next,
+    }
+```
+
+### 3. 复杂查询示例
+```python
+def search_apps(keyword=None, status=None, created_by=None):
+    """
+    复杂的应用搜索查询
+    支持多个条件的组合查询
+    """
+    query = App.query
+    
+    # 基础过滤条件
+    query = query.filter(App.deleted_at.is_(None))
+    
+    # 关键词搜索（搜索名称和描述）
+    if keyword:
+        search_pattern = f"%{keyword}%"
+        query = query.filter(
+            db.or_(
+                App.name.ilike(search_pattern),
+                App.description.ilike(search_pattern)
+            )
+        )
+    
+    # 状态过滤
+    if status:
+        query = query.filter(App.status == status)
+    
+    # 创建者过滤
+    if created_by:
+        query = query.filter(App.created_by == created_by)
+    
+    # 排序
+    query = query.order_by(App.created_at.desc())
+    
+    return query
+```
+
+## 🛡️ 数据安全
+
+### 1. 软删除实现
+```python
+class BaseModel(db.Model):
+    """基础模型，包含软删除功能"""
+    __abstract__ = True
+    
+    deleted_at = Column(DateTime)
+    
+    @classmethod
+    def query_active(cls):
+        """只查询未删除的记录"""
+        return cls.query.filter(cls.deleted_at.is_(None))
+    
+    def soft_delete(self):
+        """软删除记录"""
+        self.deleted_at = datetime.utcnow()
+        db.session.commit()
+    
+    def restore(self):
+        """恢复已删除的记录"""
+        self.deleted_at = None
+        db.session.commit()
+```
+
+### 2. 敏感数据处理
+```python
+class Account(db.Model):
+    password_hash = Column(String(255), nullable=False)
+    
+    def set_password(self, password):
+        """设置密码（自动加密）"""
+        from werkzeug.security import generate_password_hash
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password):
+        """验证密码"""
+        from werkzeug.security import check_password_hash
+        return check_password_hash(self.password_hash, password)
+    
+    def to_dict(self, include_sensitive=False):
+        """转换为字典，默认不包含敏感信息"""
+        data = {
+            'id': str(self.id),
+            'email': self.email,
+            'name': self.name,
+            'avatar': self.avatar,
+            'created_at': self.created_at.isoformat(),
+        }
+        
+        if include_sensitive:
+            # 只在特殊情况下包含敏感信息
+            data['last_login_at'] = self.last_login_at.isoformat() if self.last_login_at else None
+        
+        return data
+```
+
+## 📊 性能监控
+
+### 1. 查询性能监控
+```python
+# 在复杂查询中添加性能监控
+import time
+import logging
+
+def expensive_query():
+    """
+    复杂的查询操作，需要监控性能
+    """
+    start_time = time.time()
+    
+    try:
+        # 执行复杂查询
+        result = db.session.execute(
+            text("""
+                SELECT a.*, COUNT(c.id) as conversation_count
+                FROM apps a
+                LEFT JOIN conversations c ON a.id = c.app_id
+                WHERE a.deleted_at IS NULL
+                GROUP BY a.id
+                ORDER BY conversation_count DESC
+                LIMIT 100
+            """)
+        ).fetchall()
+        
+        # 记录查询时间
+        duration = time.time() - start_time
+        if duration > 1.0:  # 超过1秒的查询需要关注
+            logging.warning(f"Slow query detected: {duration:.2f}s")
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"Query failed: {str(e)}")
+        raise
+```
+description: 数据库设计规则
+globs:
+alwaysApply: false
+---

@@ -1,0 +1,453 @@
+# 前端开发规范 (Next.js + React + TypeScript)
+
+## 📂 文件组织规范
+
+### 页面组件 ([`web/app/`](mdc:web/app/))
+```typescript
+// app/(路由分组)/page.tsx - Next.js 13+ App Router
+'use client'
+
+import { FC } from 'react'
+import type { PageProps } from '@/types'
+
+const HomePage: FC<PageProps> = ({ params, searchParams }) => {
+  return (
+    <div className="container mx-auto px-4">
+      <h1 className="text-2xl font-bold">首页</h1>
+    </div>
+  )
+}
+
+export default HomePage
+```
+
+### 通用组件 ([`web/app/components/`](mdc:web/app/components/))
+```typescript
+// components/ui/Button.tsx
+import { FC, ButtonHTMLAttributes } from 'react'
+import { clsx } from 'clsx'
+
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary' | 'danger'
+  size?: 'sm' | 'md' | 'lg'
+  loading?: boolean
+}
+
+export const Button: FC<ButtonProps> = ({
+  variant = 'primary',
+  size = 'md',
+  loading = false,
+  children,
+  className,
+  disabled,
+  ...props
+}) => {
+  return (
+    <button
+      className={clsx(
+        'inline-flex items-center justify-center font-medium transition-colors',
+        'focus:outline-none focus:ring-2 focus:ring-offset-2',
+        {
+          'bg-blue-600 text-white hover:bg-blue-700': variant === 'primary',
+          'bg-gray-200 text-gray-900 hover:bg-gray-300': variant === 'secondary',
+          'bg-red-600 text-white hover:bg-red-700': variant === 'danger',
+        },
+        {
+          'px-2 py-1 text-sm': size === 'sm',
+          'px-4 py-2': size === 'md',
+          'px-6 py-3 text-lg': size === 'lg',
+        },
+        className
+      )}
+      disabled={disabled || loading}
+      {...props}
+    >
+      {loading && <LoadingSpinner className="mr-2" />}
+      {children}
+    </button>
+  )
+}
+```
+
+### 自定义Hooks ([`web/hooks/`](mdc:web/hooks/))
+```typescript
+// hooks/use-api.ts
+import { useState, useEffect } from 'react'
+import { ApiResponse } from '@/types'
+
+interface UseApiOptions<T> {
+  immediate?: boolean
+  onSuccess?: (data: T) => void
+  onError?: (error: Error) => void
+}
+
+export function useApi<T>(
+  apiCall: () => Promise<ApiResponse<T>>,
+  options: UseApiOptions<T> = {}
+) {
+  const { immediate = false, onSuccess, onError } = options
+  const [data, setData] = useState<T | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+
+  const execute = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const response = await apiCall()
+      setData(response.data)
+      onSuccess?.(response.data)
+    } catch (err) {
+      const error = err as Error
+      setError(error)
+      onError?.(error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (immediate) {
+      execute()
+    }
+  }, [immediate])
+
+  return { data, loading, error, execute }
+}
+```
+
+### API服务层 ([`web/service/`](mdc:web/service/))
+```typescript
+// service/user.ts
+import { api } from './base'
+import type { User, CreateUserRequest } from '@/types'
+
+export const userService = {
+  /**
+   * 获取用户列表
+   */
+  async getUsers(params?: { page?: number; limit?: number }) {
+    return api.get<User[]>('/users', { params })
+  },
+
+  /**
+   * 创建用户
+   */
+  async createUser(data: CreateUserRequest) {
+    return api.post<User>('/users', data)
+  },
+
+  /**
+   * 获取用户详情
+   */
+  async getUserById(id: string) {
+    return api.get<User>(`/users/${id}`)
+  }
+}
+```
+
+## 🎨 样式规范
+
+### 1. TailwindCSS 使用规范
+```typescript
+// 使用clsx合并类名
+import { clsx } from 'clsx'
+
+const Card: FC<{ active?: boolean }> = ({ active, children }) => (
+  <div className={clsx(
+    'rounded-lg border p-4 shadow-sm transition-colors',
+    'hover:shadow-md focus:outline-none focus:ring-2',
+    {
+      'bg-blue-50 border-blue-200': active,
+      'bg-white border-gray-200': !active,
+    }
+  )}>
+    {children}
+  </div>
+)
+```
+
+### 2. 响应式设计
+```typescript
+// 移动优先的响应式设计
+<div className="
+  grid grid-cols-1 gap-4
+  sm:grid-cols-2 sm:gap-6
+  lg:grid-cols-3 lg:gap-8
+  xl:grid-cols-4
+">
+  {items.map(item => <Card key={item.id} {...item} />)}
+</div>
+```
+
+## 🔧 状态管理
+
+### 1. Zustand Store
+```typescript
+// store/app-store.ts
+import { create } from 'zustand'
+import { devtools } from 'zustand/middleware'
+
+interface AppState {
+  user: User | null
+  theme: 'light' | 'dark'
+  sidebarOpen: boolean
+  
+  // Actions
+  setUser: (user: User | null) => void
+  toggleTheme: () => void
+  toggleSidebar: () => void
+}
+
+export const useAppStore = create<AppState>()(
+  devtools(
+    (set, get) => ({
+      user: null,
+      theme: 'light',
+      sidebarOpen: false,
+      
+      setUser: (user) => set({ user }, false, 'setUser'),
+      toggleTheme: () => set(
+        (state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' }),
+        false,
+        'toggleTheme'
+      ),
+      toggleSidebar: () => set(
+        (state) => ({ sidebarOpen: !state.sidebarOpen }),
+        false,
+        'toggleSidebar'
+      ),
+    }),
+    { name: 'app-store' }
+  )
+)
+```
+
+### 2. React Hook Form
+```typescript
+// 表单处理
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+
+const userSchema = z.object({
+  email: z.string().email('请输入有效的邮箱地址'),
+  password: z.string().min(6, '密码至少6个字符'),
+  name: z.string().min(1, '请输入姓名'),
+})
+
+type UserFormData = z.infer<typeof userSchema>
+
+const UserForm: FC = () => {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<UserFormData>({
+    resolver: zodResolver(userSchema),
+  })
+
+  const onSubmit = async (data: UserFormData) => {
+    try {
+      await userService.createUser(data)
+      // 处理成功
+    } catch (error) {
+      // 处理错误
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <div>
+        <input
+          {...register('email')}
+          type="email"
+          placeholder="邮箱"
+          className="w-full px-3 py-2 border rounded-md"
+        />
+        {errors.email && (
+          <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
+        )}
+      </div>
+      
+      <Button type="submit" loading={isSubmitting}>
+        提交
+      </Button>
+    </form>
+  )
+}
+```
+
+## 🌐 国际化
+
+### 1. 使用i18next
+```typescript
+// hooks/use-translation.ts
+import { useTranslation } from 'react-i18next'
+
+export const useI18n = () => {
+  const { t, i18n } = useTranslation()
+  
+  return {
+    t,
+    locale: i18n.language,
+    changeLocale: (locale: string) => i18n.changeLanguage(locale),
+  }
+}
+
+// 在组件中使用
+const Welcome: FC = () => {
+  const { t } = useI18n()
+  
+  return (
+    <div>
+      <h1>{t('welcome.title')}</h1>
+      <p>{t('welcome.description')}</p>
+    </div>
+  )
+}
+```
+
+## 🛡️ 类型安全
+
+### 1. API类型定义
+```typescript
+// types/api.ts
+export interface ApiResponse<T = any> {
+  success: boolean
+  data: T
+  message?: string
+  code?: string
+}
+
+export interface PaginatedResponse<T> {
+  items: T[]
+  total: number
+  page: number
+  limit: number
+  hasMore: boolean
+}
+
+// types/user.ts
+export interface User {
+  id: string
+  email: string
+  name: string
+  avatar?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateUserRequest {
+  email: string
+  password: string
+  name: string
+}
+```
+
+### 2. 组件Props类型
+```typescript
+// 严格的组件类型定义
+interface UserCardProps {
+  user: User
+  showActions?: boolean
+  onEdit?: (user: User) => void
+  onDelete?: (userId: string) => void
+  className?: string
+}
+
+const UserCard: FC<UserCardProps> = ({
+  user,
+  showActions = true,
+  onEdit,
+  onDelete,
+  className
+}) => {
+  // 组件实现
+}
+```
+
+## 🚫 避免的反模式
+
+1. **不要**在组件中写复杂的业务逻辑
+2. **不要**直接修改props或state
+3. **不要**忘记处理loading和error状态
+4. **不要**使用any类型（除非确实必要）
+5. **不要**在useEffect中忘记清理副作用
+
+## 📝 注释规范
+
+```typescript
+/**
+ * 复杂的用户数据处理组件
+ * 
+ * 这个组件处理用户数据的展示和编辑，包含以下功能：
+ * 1. 用户信息展示
+ * 2. 内联编辑功能
+ * 3. 头像上传
+ * 4. 权限控制
+ */
+interface UserProfileProps {
+  userId: string
+  editable?: boolean
+  onUpdate?: (user: User) => void
+}
+
+const UserProfile: FC<UserProfileProps> = ({ userId, editable, onUpdate }) => {
+  // 获取用户数据
+  const { data: user, loading, error } = useApi(
+    () => userService.getUserById(userId),
+    { immediate: true }
+  )
+
+  // 处理编辑模式切换
+  const [isEditing, setIsEditing] = useState(false)
+  
+  // 复杂的表单处理逻辑
+  const handleSubmit = useCallback(async (formData: UserFormData) => {
+    try {
+      // 数据验证和提交
+      const updatedUser = await userService.updateUser(userId, formData)
+      onUpdate?.(updatedUser)
+      setIsEditing(false)
+    } catch (error) {
+      // 错误处理
+      console.error('更新用户失败:', error)
+    }
+  }, [userId, onUpdate])
+
+  // 组件渲染逻辑
+  if (loading) return <UserProfileSkeleton />
+  if (error) return <ErrorMessage error={error} />
+  if (!user) return <NotFound />
+
+  return (
+    // JSX内容
+  )
+}
+```
+
+## 🧪 不主动运行测试
+
+根据用户要求，开发完成后**不要主动运行测试命令**，但代码应该易于测试：
+
+```typescript
+// 编写可测试的纯函数
+export const formatUserName = (user: User): string => {
+  return user.name || user.email.split('@')[0]
+}
+
+// 编写可测试的组件
+export const UserCard: FC<UserCardProps> = ({ user, onEdit }) => {
+  return (
+    <div data-testid="user-card">
+      <h3>{formatUserName(user)}</h3>
+      <button onClick={() => onEdit?.(user)}>编辑</button>
+    </div>
+  )
+}
+```
+description: 前端开发规则
+globs:
+alwaysApply: false
+---

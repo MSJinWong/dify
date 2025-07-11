@@ -1,0 +1,116 @@
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: dify-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dify}
+      POSTGRES_USER: ${POSTGRES_USER:-dify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dify123456}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    command: >
+      postgres 
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dify} -d ${POSTGRES_DB:-dify}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dify-network
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: dify-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --bind 0.0.0.0
+      --port 6379
+      --protected-mode no
+      --requirepass ${REDIS_PASSWORD:-redis123456}
+      --maxmemory ${REDIS_MAXMEMORY:-1gb}
+      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
+      --save 900 ${REDIS_SAVE_900:-1}
+      --save 300 ${REDIS_SAVE_300:-10}
+      --save 60 ${REDIS_SAVE_60:-10000}
+      --appendonly ${REDIS_APPENDONLY:-yes}
+      --appendfsync ${REDIS_APPENDFSYNC:-everysec}
+      --tcp-keepalive ${REDIS_TCP_KEEPALIVE:-300}
+      --timeout ${REDIS_TIMEOUT:-0}
+      --maxclients ${REDIS_MAXCLIENTS:-10000}
+      --loglevel ${REDIS_LOGLEVEL:-notice}
+      --slowlog-log-slower-than ${REDIS_SLOWLOG_LOG_SLOWER_THAN:-10000}
+      --slowlog-max-len ${REDIS_SLOWLOG_MAX_LEN:-128}
+      --databases ${REDIS_DATABASES:-16}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123456}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dify-network
+
+  # Weaviate 向量数据库
+  weaviate:
+    image: semitechnologies/weaviate:1.19.0
+    container_name: dify-weaviate
+    restart: unless-stopped
+    ports:
+      - "${WEAVIATE_PORT:-8080}:8080"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: '${WEAVIATE_API_KEY:-weaviate-api-key-123456}'
+      AUTHENTICATION_APIKEY_USERS: 'dify@localhost'
+      AUTHORIZATION_ADMINLIST_ENABLED: 'true'
+      AUTHORIZATION_ADMINLIST_USERS: 'dify@localhost'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      CLUSTER_HOSTNAME: 'node1'
+      LOG_LEVEL: 'info'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - dify-network
+
+# 数据卷
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  weaviate_data:
+    driver: local
+
+# 网络
+networks:
+  dify-network:
+    driver: bridge 

@@ -1,0 +1,675 @@
+# API 设计规范
+
+## 🛣️ RESTful API 路由设计
+
+### URL 命名规范
+```python
+# ✅ 正确的REST风格
+GET    /api/v1/apps              # 获取应用列表
+POST   /api/v1/apps              # 创建应用
+GET    /api/v1/apps/{app_id}     # 获取单个应用
+PUT    /api/v1/apps/{app_id}     # 更新应用
+DELETE /api/v1/apps/{app_id}     # 删除应用
+
+# 嵌套资源
+GET    /api/v1/apps/{app_id}/conversations        # 获取应用的对话列表
+POST   /api/v1/apps/{app_id}/conversations        # 创建对话
+GET    /api/v1/conversations/{conversation_id}    # 获取对话详情
+
+# ❌ 避免的设计
+GET    /api/v1/getApps           # 不要在URL中使用动词
+POST   /api/v1/createApp         # 使用HTTP方法表示动作
+GET    /api/v1/app/list          # 复数形式表示集合
+```
+
+### 控制器结构 ([`api/controllers/`](mdc:api/controllers/))
+```python
+# controllers/console/app/app_controller.py
+from flask import Blueprint, request, jsonify
+from flask_login import login_required, current_user
+from services.app_service import AppService
+from libs.exception import validate_json
+
+bp = Blueprint('app', __name__, url_prefix='/console/api/apps')
+
+@bp.route('/', methods=['GET'])
+@login_required
+def list_apps():
+    """
+    获取应用列表
+    ---
+    tags:
+      - 应用管理
+    parameters:
+      - name: page
+        in: query
+        type: integer
+        default: 1
+      - name: limit
+        in: query
+        type: integer
+        default: 20
+      - name: keyword
+        in: query
+        type: string
+    responses:
+      200:
+        description: 应用列表
+        schema:
+          type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/definitions/App'
+            total:
+              type: integer
+    """
+    # 获取查询参数
+    page = request.args.get('page', 1, type=int)
+    limit = request.args.get('limit', 20, type=int)
+    keyword = request.args.get('keyword', '')
+    
+    # 调用服务层
+    result = AppService.get_paginated_apps(
+        user_id=current_user.id,
+        page=page,
+        limit=limit,
+        keyword=keyword
+    )
+    
+    return jsonify({
+        'result': 'success',
+        'data': result['items'],
+        'total': result['total'],
+        'page': result['page']
+    })
+
+@bp.route('/', methods=['POST'])
+@login_required
+@validate_json(['name', 'mode'])
+def create_app():
+    """
+    创建应用
+    ---
+    tags:
+      - 应用管理
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          required:
+            - name
+            - mode
+          properties:
+            name:
+              type: string
+              minLength: 1
+              maxLength: 255
+            description:
+              type: string
+            mode:
+              type: string
+              enum: [chat, agent, workflow]
+            icon:
+              type: string
+    """
+    data = request.get_json()
+    
+    # 创建应用
+    app = AppService.create_app(
+        name=data['name'],
+        description=data.get('description', ''),
+        mode=data['mode'],
+        icon=data.get('icon'),
+        created_by=current_user.id
+    )
+    
+    return jsonify({
+        'result': 'success',
+        'data': app.to_dict()
+    }), 201
+
+@bp.route('/<uuid:app_id>', methods=['GET'])
+@login_required
+def get_app(app_id):
+    """获取应用详情"""
+    app = AppService.get_app_by_id(app_id, current_user.id)
+    
+    return jsonify({
+        'result': 'success',
+        'data': app.to_dict()
+    })
+
+@bp.route('/<uuid:app_id>', methods=['PUT'])
+@login_required
+@validate_json(['name'])
+def update_app(app_id):
+    """更新应用"""
+    data = request.get_json()
+    
+    app = AppService.update_app(
+        app_id=app_id,
+        user_id=current_user.id,
+        **data
+    )
+    
+    return jsonify({
+        'result': 'success',
+        'data': app.to_dict()
+    })
+
+@bp.route('/<uuid:app_id>', methods=['DELETE'])
+@login_required
+def delete_app(app_id):
+    """删除应用"""
+    AppService.delete_app(app_id, current_user.id)
+    
+    return jsonify({
+        'result': 'success',
+        'message': '应用已删除'
+    })
+```
+
+## 📄 响应格式规范
+
+### 标准响应结构
+```python
+# 成功响应
+{
+    "result": "success",
+    "data": {
+        "id": "123e4567-e89b-12d3-a456-426614174000",
+        "name": "我的AI助手",
+        "description": "智能客服助手",
+        "mode": "chat",
+        "created_at": "2024-01-01T00:00:00Z"
+    }
+}
+
+# 分页响应
+{
+    "result": "success",
+    "data": [
+        {"id": "...", "name": "应用1"},
+        {"id": "...", "name": "应用2"}
+    ],
+    "total": 100,
+    "page": 1,
+    "limit": 20,
+    "has_more": true
+}
+
+# 错误响应
+{
+    "result": "error",
+    "code": "APP_NOT_FOUND",
+    "message": "应用不存在",
+    "details": {
+        "app_id": "123e4567-e89b-12d3-a456-426614174000"
+    }
+}
+```
+
+### 响应辅助函数
+```python
+# libs/response.py
+from flask import jsonify
+
+def success_response(data=None, message=None, status_code=200):
+    """成功响应"""
+    response_data = {"result": "success"}
+    
+    if data is not None:
+        response_data["data"] = data
+    if message:
+        response_data["message"] = message
+    
+    return jsonify(response_data), status_code
+
+def error_response(code, message, details=None, status_code=400):
+    """错误响应"""
+    response_data = {
+        "result": "error",
+        "code": code,
+        "message": message
+    }
+    
+    if details:
+        response_data["details"] = details
+    
+    return jsonify(response_data), status_code
+
+def paginated_response(items, total, page, limit, has_more=None):
+    """分页响应"""
+    if has_more is None:
+        has_more = page * limit < total
+    
+    return jsonify({
+        "result": "success",
+        "data": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": has_more
+    })
+```
+
+## 🔐 认证和权限
+
+### 认证装饰器
+```python
+# libs/auth.py
+from functools import wraps
+from flask import request, current_app
+from flask_login import current_user
+from libs.exception import Unauthorized, Forbidden
+
+def api_key_required(f):
+    """API密钥认证"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        api_key = request.headers.get('Authorization')
+        if not api_key or not api_key.startswith('Bearer '):
+            raise Unauthorized('缺少API密钥')
+        
+        # 验证API密钥
+        token = api_key[7:]  # 移除 'Bearer ' 前缀
+        if not validate_api_key(token):
+            raise Unauthorized('无效的API密钥')
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+def require_permission(permission):
+    """权限检查装饰器"""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if not current_user.is_authenticated:
+                raise Unauthorized('用户未登录')
+            
+            if not current_user.has_permission(permission):
+                raise Forbidden(f'缺少权限: {permission}')
+            
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+# 使用示例
+@bp.route('/admin/users', methods=['GET'])
+@login_required
+@require_permission('admin.users.read')
+def list_users():
+    """管理员查看用户列表"""
+    pass
+```
+
+### 资源权限检查
+```python
+# services/app_service.py
+class AppService:
+    @staticmethod
+    def get_app_by_id(app_id: str, user_id: str):
+        """
+        获取应用详情，并检查用户权限
+        """
+        app = App.query.filter(
+            App.id == app_id,
+            App.deleted_at.is_(None)
+        ).first()
+        
+        if not app:
+            raise AppNotFoundError()
+        
+        # 检查用户是否有权限访问此应用
+        if not AppService.check_app_permission(app, user_id, 'read'):
+            raise InsufficientPermissionError()
+        
+        return app
+    
+    @staticmethod
+    def check_app_permission(app, user_id: str, action: str) -> bool:
+        """
+        检查用户对应用的权限
+        
+        Args:
+            app: 应用对象
+            user_id: 用户ID
+            action: 操作类型 (read, write, delete)
+        
+        Returns:
+            是否有权限
+        """
+        # 创建者拥有所有权限
+        if str(app.created_by) == user_id:
+            return True
+        
+        # 检查协作者权限
+        collaboration = AppCollaboration.query.filter(
+            AppCollaboration.app_id == app.id,
+            AppCollaboration.user_id == user_id
+        ).first()
+        
+        if collaboration:
+            return collaboration.has_permission(action)
+        
+        return False
+```
+
+## 📝 输入验证
+
+### 请求数据验证
+```python
+# libs/validation.py
+from pydantic import BaseModel, validator, Field
+from typing import Optional
+from enum import Enum
+
+class AppMode(str, Enum):
+    CHAT = "chat"
+    AGENT = "agent" 
+    WORKFLOW = "workflow"
+
+class CreateAppRequest(BaseModel):
+    """创建应用请求模型"""
+    name: str = Field(..., min_length=1, max_length=255, description="应用名称")
+    description: Optional[str] = Field(None, max_length=2000, description="应用描述")
+    mode: AppMode = Field(..., description="应用模式")
+    icon: Optional[str] = Field(None, description="应用图标")
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if not v.strip():
+            raise ValueError('应用名称不能为空')
+        return v.strip()
+    
+    @validator('icon')
+    def validate_icon(cls, v):
+        if v and not v.startswith(('http://', 'https://', 'data:')):
+            raise ValueError('图标必须是有效的URL或Data URI')
+        return v
+
+class UpdateAppRequest(BaseModel):
+    """更新应用请求模型"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=2000)
+    icon: Optional[str] = None
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if v is not None and not v.strip():
+            raise ValueError('应用名称不能为空')
+        return v.strip() if v else v
+
+# 验证装饰器
+def validate_request(model_class):
+    """请求数据验证装饰器"""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            try:
+                data = request.get_json()
+                if data is None:
+                    raise ValidationError('请求体不能为空')
+                
+                # 使用Pydantic验证数据
+                validated_data = model_class(**data)
+                request.validated_data = validated_data
+                
+                return f(*args, **kwargs)
+            except ValidationError as e:
+                return error_response(
+                    code='VALIDATION_ERROR',
+                    message='数据验证失败',
+                    details=e.errors(),
+                    status_code=422
+                )
+        return decorated_function
+    return decorator
+
+# 使用示例
+@bp.route('/', methods=['POST'])
+@login_required
+@validate_request(CreateAppRequest)
+def create_app():
+    """创建应用"""
+    validated_data = request.validated_data
+    
+    app = AppService.create_app(
+        name=validated_data.name,
+        description=validated_data.description,
+        mode=validated_data.mode.value,
+        icon=validated_data.icon,
+        created_by=current_user.id
+    )
+    
+    return success_response(app.to_dict(), status_code=201)
+```
+
+## 🔄 异步任务API
+
+### Celery任务接口
+```python
+# controllers/console/app/task_controller.py
+@bp.route('/<uuid:app_id>/export', methods=['POST'])
+@login_required
+def export_app(app_id):
+    """
+    导出应用（异步任务）
+    
+    返回任务ID，客户端可以通过任务ID查询进度
+    """
+    # 检查应用权限
+    app = AppService.get_app_by_id(app_id, current_user.id)
+    
+    # 启动异步任务
+    from tasks.export_task import export_app_task
+    task = export_app_task.delay(str(app_id), current_user.id)
+    
+    return jsonify({
+        'result': 'success',
+        'task_id': task.id,
+        'message': '导出任务已启动'
+    })
+
+@bp.route('/tasks/<task_id>', methods=['GET'])
+@login_required
+def get_task_status(task_id):
+    """查询任务状态"""
+    from celery.result import AsyncResult
+    
+    task = AsyncResult(task_id)
+    
+    if task.state == 'PENDING':
+        response = {
+            'state': task.state,
+            'status': '任务等待中'
+        }
+    elif task.state == 'PROGRESS':
+        response = {
+            'state': task.state,
+            'status': task.info.get('status', ''),
+            'progress': task.info.get('progress', 0)
+        }
+    elif task.state == 'SUCCESS':
+        response = {
+            'state': task.state,
+            'status': '任务完成',
+            'result': task.result
+        }
+    else:  # FAILURE
+        response = {
+            'state': task.state,
+            'status': '任务失败',
+            'error': str(task.info)
+        }
+    
+    return jsonify({
+        'result': 'success',
+        'data': response
+    })
+```
+
+## 🚫 错误处理
+
+### 统一异常处理
+```python
+# libs/exception.py
+class BaseHTTPException(Exception):
+    """HTTP异常基类"""
+    error_code = 'UNKNOWN_ERROR'
+    description = '未知错误'
+    code = 500
+
+class ValidationError(BaseHTTPException):
+    error_code = 'VALIDATION_ERROR'
+    description = '数据验证失败'
+    code = 422
+
+class AppNotFoundError(BaseHTTPException):
+    error_code = 'APP_NOT_FOUND'
+    description = '应用不存在'
+    code = 404
+
+class InsufficientPermissionError(BaseHTTPException):
+    error_code = 'INSUFFICIENT_PERMISSION'
+    description = '权限不足'
+    code = 403
+
+# 全局异常处理器
+@app.errorhandler(BaseHTTPException)
+def handle_http_exception(e):
+    """处理自定义HTTP异常"""
+    return error_response(
+        code=e.error_code,
+        message=e.description,
+        status_code=e.code
+    )
+
+@app.errorhandler(ValidationError)
+def handle_validation_error(e):
+    """处理数据验证异常"""
+    return error_response(
+        code='VALIDATION_ERROR',
+        message='数据验证失败',
+        details=e.errors() if hasattr(e, 'errors') else None,
+        status_code=422
+    )
+
+@app.errorhandler(500)
+def handle_internal_error(e):
+    """处理服务器内部错误"""
+    # 记录错误日志
+    import logging
+    logging.error(f"Internal server error: {str(e)}")
+    
+    return error_response(
+        code='INTERNAL_SERVER_ERROR',
+        message='服务器内部错误',
+        status_code=500
+    )
+```
+
+## 📊 API文档
+
+### Swagger文档配置
+```python
+# extensions/ext_swagger.py
+from flask_restx import Api
+from flask import Blueprint
+
+# 创建API文档蓝图
+api_doc = Blueprint('api_doc', __name__)
+
+api = Api(
+    api_doc,
+    version='1.0',
+    title='Dify API',
+    description='Dify平台API文档',
+    doc='/doc/',
+    authorizations={
+        'Bearer': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'Authorization',
+            'description': 'JWT Token: Bearer <token>'
+        }
+    }
+)
+
+# 定义数据模型
+from flask_restx import fields
+
+app_model = api.model('App', {
+    'id': fields.String(required=True, description='应用ID'),
+    'name': fields.String(required=True, description='应用名称'),
+    'description': fields.String(description='应用描述'),
+    'mode': fields.String(required=True, description='应用模式'),
+    'created_at': fields.DateTime(description='创建时间'),
+})
+
+create_app_model = api.model('CreateApp', {
+    'name': fields.String(required=True, description='应用名称'),
+    'description': fields.String(description='应用描述'),
+    'mode': fields.String(required=True, description='应用模式'),
+    'icon': fields.String(description='应用图标'),
+})
+```
+
+## 📈 API性能优化
+
+### 缓存策略
+```python
+# libs/cache.py
+from flask import request
+import hashlib
+import json
+from extensions.ext_redis import redis_client
+
+def cache_response(timeout=300):
+    """响应缓存装饰器"""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # 生成缓存键
+            cache_key = generate_cache_key(request, args, kwargs)
+            
+            # 尝试从缓存获取
+            cached_result = redis_client.get(cache_key)
+            if cached_result:
+                return json.loads(cached_result)
+            
+            # 执行函数
+            result = f(*args, **kwargs)
+            
+            # 缓存结果
+            redis_client.setex(
+                cache_key,
+                timeout,
+                json.dumps(result, default=str)
+            )
+            
+            return result
+        return decorated_function
+    return decorator
+
+def generate_cache_key(request, args, kwargs):
+    """生成缓存键"""
+    key_data = {
+        'path': request.path,
+        'args': request.args.to_dict(),
+        'func_args': args,
+        'func_kwargs': kwargs,
+        'user_id': getattr(current_user, 'id', None)
+    }
+    
+    key_str = json.dumps(key_data, sort_keys=True)
+    return f"api_cache:{hashlib.md5(key_str.encode()).hexdigest()}"
+```
+description: API设计规则
+globs:
+alwaysApply: false
+---

@@ -1,0 +1,205 @@
+# 后端开发规范 (Python Flask)
+
+## 📂 文件组织规范
+
+### 控制器层 ([`api/controllers/`](mdc:api/controllers/))
+```python
+# 控制器命名: {模块名}_controller.py
+# 示例: user_controller.py, app_controller.py
+
+from flask import Blueprint, request, jsonify
+from services.user_service import UserService
+
+bp = Blueprint('user', __name__, url_prefix='/api/users')
+
+@bp.route('/', methods=['GET'])
+def list_users():
+    """获取用户列表"""
+    # 简洁的业务逻辑，复杂逻辑放到service层
+    pass
+```
+
+### 服务层 ([`api/services/`](mdc:api/services/))
+```python
+# 服务命名: {模块名}_service.py
+# 业务逻辑的核心实现
+
+class UserService:
+    @staticmethod
+    def create_user(user_data: dict) -> dict:
+        """
+        创建用户
+        Args:
+            user_data: 用户数据字典
+        Returns:
+            创建的用户信息
+        Raises:
+            ValidationError: 数据验证失败
+        """
+        # 在这里实现具体的业务逻辑
+        pass
+```
+
+### 数据模型 ([`api/models/`](mdc:api/models/))
+```python
+# 使用SQLAlchemy定义数据模型
+from sqlalchemy import Column, String, DateTime
+from extensions.ext_database import db
+
+class User(db.Model):
+    __tablename__ = 'users'
+    
+    id = Column(String(36), primary_key=True)
+    email = Column(String(255), nullable=False, unique=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+```
+
+## 🛡️ 开发规范
+
+### 1. 错误处理
+```python
+from libs.exception import BaseHTTPException
+
+# 使用自定义异常类
+class UserNotFoundError(BaseHTTPException):
+    error_code = 'USER_NOT_FOUND'
+    description = "用户不存在"
+    code = 404
+
+# 在服务中抛出异常
+if not user:
+    raise UserNotFoundError()
+```
+
+### 2. 数据验证
+```python
+from pydantic import BaseModel, validator
+
+class UserCreateRequest(BaseModel):
+    email: str
+    password: str
+    
+    @validator('email')
+    def validate_email(cls, v):
+        # 邮箱格式验证
+        if '@' not in v:
+            raise ValueError('无效的邮箱格式')
+        return v
+```
+
+### 3. 数据库操作
+```python
+# 使用事务确保数据一致性
+from extensions.ext_database import db
+
+def create_user_with_profile(user_data, profile_data):
+    try:
+        with db.session.begin():
+            user = User(**user_data)
+            db.session.add(user)
+            db.session.flush()  # 获取user.id
+            
+            profile = UserProfile(user_id=user.id, **profile_data)
+            db.session.add(profile)
+            
+        return user
+    except Exception as e:
+        db.session.rollback()
+        raise e
+```
+
+### 4. 配置管理
+```python
+# 使用环境变量和配置类
+from configs.app_config import DifyConfig
+
+# 获取配置
+database_url = DifyConfig.SQLALCHEMY_DATABASE_URI
+redis_url = DifyConfig.REDIS_URL
+```
+
+### 5. 日志记录
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+def process_data():
+    logger.info("开始处理数据")
+    try:
+        # 业务逻辑
+        pass
+    except Exception as e:
+        logger.error(f"处理数据失败: {str(e)}")
+        raise
+```
+
+## 🚫 避免的反模式
+
+1. **不要**在控制器中写复杂业务逻辑
+2. **不要**直接在视图中操作数据库
+3. **不要**硬编码配置信息
+4. **不要**忽略异常处理
+5. **不要**写过深的嵌套代码（超过3层）
+
+## 📝 注释规范
+
+```python
+def complex_algorithm(data: list, threshold: float) -> dict:
+    """
+    复杂算法的实现
+    
+    这是一个相对复杂的业务逻辑函数，需要详细说明：
+    1. 数据预处理和验证
+    2. 核心算法逻辑
+    3. 结果格式化和返回
+    
+    Args:
+        data: 输入数据列表
+        threshold: 阈值参数，用于过滤
+        
+    Returns:
+        处理结果字典，包含处理状态和数据
+        
+    Raises:
+        ValueError: 当输入数据格式错误时
+    """
+    # 步骤1：数据验证
+    if not data or threshold < 0:
+        raise ValueError("输入参数无效")
+    
+    # 步骤2：数据处理（复杂逻辑需要注释说明）
+    processed_data = []
+    for item in data:
+        # 应用阈值过滤
+        if item.score >= threshold:
+            processed_data.append(transform_item(item))
+    
+    # 步骤3：返回结果
+    return {
+        'success': True,
+        'count': len(processed_data),
+        'data': processed_data
+    }
+```
+
+## 🧪 不主动运行测试
+
+根据用户要求，代码开发完成后**不要主动运行测试命令**，但代码应该是可测试的：
+
+```python
+# 编写易于测试的代码
+def calculate_total(items: list) -> float:
+    """计算总价 - 纯函数，易于测试"""
+    return sum(item.price * item.quantity for item in items)
+
+# 避免难以测试的代码
+def process_order():
+    """避免：在函数内部直接访问数据库和外部服务"""
+    user = User.query.get(1)  # 难以mock
+    send_email(user.email)    # 难以测试
+```
+description:后端开发规则
+globs:
+alwaysApply: false
+---
